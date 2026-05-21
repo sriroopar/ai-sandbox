@@ -15,13 +15,29 @@ mkdir -p "$SANDBOX/logs"
 
 # Skip mounting if using HTTP delivery (Windows)
 USE_HTTP=0
+USE_SSHFS=0
+USE_CIFS=0
 if [[ -f /etc/ai-sandbox/windows-host.env ]]; then
   source /etc/ai-sandbox/windows-host.env
   [[ "${USE_HTTP:-0}" == "1" ]] && USE_HTTP=1
 fi
+[[ -f /etc/ai-sandbox/sshfs.env ]] && { source /etc/ai-sandbox/sshfs.env; [[ "${USE_SSHFS:-0}" == "1" ]] && USE_SSHFS=1; }
+[[ -f /etc/ai-sandbox/cifs.env  ]] && { source /etc/ai-sandbox/cifs.env;  [[ "${USE_CIFS:-0}"  == "1" ]] && USE_CIFS=1;  }
 
 if [[ "$USE_HTTP" == "0" ]] && ! mountpoint -q /mnt/host-config 2>/dev/null; then
   sudo "$SCRIPT_DIR/ensure-sandbox-mounts.sh" "${USER}"
+fi
+
+# Live passthrough (SSHFS/CIFS): install systemd unit so mounts survive reboot.
+if [[ "$USE_SSHFS" == "1" || "$USE_CIFS" == "1" ]]; then
+  unit_src="$SCRIPT_DIR/systemd"
+  if [[ -d "$unit_src" ]]; then
+    sudo install -d -m 0755 /etc/ai-sandbox
+    echo "AI_SANDBOX_TARGET_USER=${USER}" | sudo tee /etc/ai-sandbox/target-user.env >/dev/null
+    sudo install -m 0644 "$unit_src/ai-sandbox-mounts.service" /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now ai-sandbox-mounts.service
+  fi
 fi
 
 #################################

@@ -9,6 +9,7 @@ SANDBOX="$SANDBOX_HOME/ai-sandbox"
 mkdir -p /mnt/host-config /mnt/host-secrets /mnt/host-workspace /mnt/host-ai-sandbox
 
 USE_CIFS=0
+USE_SSHFS=0
 if [[ -f /etc/ai-sandbox/cifs.env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -16,6 +17,51 @@ if [[ -f /etc/ai-sandbox/cifs.env ]]; then
   set +a
   [[ "${USE_CIFS:-0}" == "1" ]] && USE_CIFS=1
 fi
+if [[ -f /etc/ai-sandbox/sshfs.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /etc/ai-sandbox/sshfs.env
+  set +a
+  [[ "${USE_SSHFS:-0}" == "1" ]] && USE_SSHFS=1
+fi
+
+mount_sshfs_tree() {
+  local missing=0 v
+  for v in SSHFS_HOST SSHFS_USER SSHFS_REMOTE_PATH SSHFS_IDENTITY; do
+    [[ -n "${!v:-}" ]] || { echo "USE_SSHFS=1 but $v missing in /etc/ai-sandbox/sshfs.env" >&2; missing=1; }
+  done
+  (( missing == 0 )) || return 1
+  [[ -r "$SSHFS_IDENTITY" ]] || {
+    echo "SSHFS_IDENTITY not readable: $SSHFS_IDENTITY" >&2
+    return 1
+  }
+  if ! command -v sshfs >/dev/null 2>&1; then
+    dnf install -y fuse-sshfs
+  fi
+  local uid gid known_hosts
+  uid=$(id -u "$TARGET_USER")
+  gid=$(id -g "$TARGET_USER")
+  known_hosts="/etc/ai-sandbox/known_hosts"
+  # Trust-on-first-use: capture host key once, enforce strict checking afterward.
+  if [[ ! -s "$known_hosts" ]]; then
+    ssh-keyscan -T 5 -t ed25519,rsa "$SSHFS_HOST" > "$known_hosts" 2>/dev/null || {
+      echo "Could not fetch host key from $SSHFS_HOST" >&2
+      return 1
+    }
+    chmod 644 "$known_hosts"
+  fi
+  if ! mountpoint -q /mnt/host-ai-sandbox 2>/dev/null; then
+    sshfs "${SSHFS_USER}@${SSHFS_HOST}:${SSHFS_REMOTE_PATH}" /mnt/host-ai-sandbox \
+      -o "IdentityFile=$SSHFS_IDENTITY,UserKnownHostsFile=$known_hosts,StrictHostKeyChecking=yes,allow_other,default_permissions,uid=$uid,gid=$gid,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,_netdev,nofail"
+  fi
+  mkdir -p "/mnt/host-ai-sandbox/config" "/mnt/host-ai-sandbox/secrets" "/mnt/host-ai-sandbox/workspace" 2>/dev/null || true
+  local sub
+  for sub in config secrets workspace; do
+    if ! mountpoint -q "/mnt/host-$sub" 2>/dev/null; then
+      mount --bind "/mnt/host-ai-sandbox/$sub" "/mnt/host-$sub"
+    fi
+  done
+}
 
 mount_cifs_tree() {
   [[ -n "${CIFS_URL:-}" ]] || {
@@ -60,9 +106,20 @@ mount_virtiofs_tree() {
   fi
 }
 
-if [[ "$USE_CIFS" == "1" ]]; then
+if [[ "$USE_SSHFS" == "1" ]]; then
+  mount_sshfs_tree
+  echo "SSHFS mode: ai-sandbox-mounts.service re-establishes mounts on boot (Restart=on-failure retries until host reachable)." >&2
+elif [[ "$USE_CIFS" == "1" ]]; then
   mount_cifs_tree
-  echo "CIFS mode: persist mounts across reboots with /etc/fstab entries (see config/cifs.env.example)." >&2
+  if ! grep -q '# ai-sandbox cifs' /etc/fstab 2>/dev/null; then
+    uid=$(id -u "$TARGET_USER")
+    gid=$(id -g "$TARGET_USER")
+    cred="${CIFS_CREDENTIALS:-/etc/ai-sandbox/smbcredentials}"
+    {
+      echo "# ai-sandbox cifs"
+      echo "$CIFS_URL /mnt/host-ai-sandbox cifs credentials=$cred,uid=$uid,gid=$gid,file_mode=0644,dir_mode=0755,noperm,_netdev,nofail 0 0"
+    } >> /etc/fstab
+  fi
 else
   mount_virtiofs_tree
   if ! grep -q '# ai-sandbox virtiofs' /etc/fstab 2>/dev/null; then
