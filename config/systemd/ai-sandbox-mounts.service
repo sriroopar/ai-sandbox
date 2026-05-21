@@ -1,6 +1,6 @@
 [Unit]
 Description=ai-sandbox host passthrough mounts
-Documentation=file:/home/ai/ai-sandbox/config/ensure-sandbox-mounts.sh
+Documentation=file:/usr/local/sbin/ai-sandbox-ensure-mounts.sh
 After=network-online.target
 Wants=network-online.target
 
@@ -8,8 +8,10 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=-/etc/ai-sandbox/target-user.env
-ExecStart=/bin/sh -c '/home/${AI_SANDBOX_TARGET_USER:-ai}/ai-sandbox/config/ensure-sandbox-mounts.sh "${AI_SANDBOX_TARGET_USER:-ai}"'
-ExecStop=/bin/sh -c 'umount /mnt/host-config /mnt/host-secrets /mnt/host-workspace 2>/dev/null; fusermount -u /mnt/host-ai-sandbox 2>/dev/null; umount /mnt/host-ai-sandbox 2>/dev/null; true'
+# Runs a LOCAL copy: in SSHFS mode the share isn't mounted yet at boot, so the
+# mount script cannot live on the share it mounts (install-inside-vm.sh installs it here).
+ExecStart=/usr/local/sbin/ai-sandbox-ensure-mounts.sh ${AI_SANDBOX_TARGET_USER}
+ExecStop=/bin/sh -c 'umount /mnt/host-ai-sandbox/workspace/har 2>/dev/null; umount /mnt/host-workspace/har 2>/dev/null; umount /mnt/host-config /mnt/host-secrets /mnt/host-workspace 2>/dev/null; fusermount -u /mnt/host-ai-sandbox 2>/dev/null; umount -l /mnt/host-ai-sandbox 2>/dev/null; true'
 Restart=on-failure
 RestartSec=15s
 TimeoutStartSec=120s

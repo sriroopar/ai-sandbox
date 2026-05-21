@@ -34,6 +34,9 @@ if [[ "$USE_SSHFS" == "1" || "$USE_CIFS" == "1" ]]; then
   if [[ -d "$unit_src" ]]; then
     sudo install -d -m 0755 /etc/ai-sandbox
     echo "AI_SANDBOX_TARGET_USER=${USER}" | sudo tee /etc/ai-sandbox/target-user.env >/dev/null
+    # SSHFS bootstrap: the share isn't mounted at boot, so the mount script must
+    # live on local disk, not on the share it mounts. Install a local copy.
+    sudo install -m 0755 "$SCRIPT_DIR/ensure-sandbox-mounts.sh" /usr/local/sbin/ai-sandbox-ensure-mounts.sh
     sudo install -m 0644 "$unit_src/ai-sandbox-mounts.service" /etc/systemd/system/
     sudo systemctl daemon-reload
     sudo systemctl enable --now ai-sandbox-mounts.service

@@ -52,7 +52,7 @@ mount_sshfs_tree() {
   fi
   if ! mountpoint -q /mnt/host-ai-sandbox 2>/dev/null; then
     sshfs "${SSHFS_USER}@${SSHFS_HOST}:${SSHFS_REMOTE_PATH}" /mnt/host-ai-sandbox \
-      -o "IdentityFile=$SSHFS_IDENTITY,UserKnownHostsFile=$known_hosts,StrictHostKeyChecking=yes,allow_other,default_permissions,uid=$uid,gid=$gid,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,_netdev,nofail"
+      -o "IdentityFile=$SSHFS_IDENTITY,UserKnownHostsFile=$known_hosts,StrictHostKeyChecking=yes,allow_other,default_permissions,uid=$uid,gid=$gid,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
   fi
   mkdir -p "/mnt/host-ai-sandbox/config" "/mnt/host-ai-sandbox/secrets" "/mnt/host-ai-sandbox/workspace" 2>/dev/null || true
   local sub
