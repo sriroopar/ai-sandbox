@@ -38,20 +38,34 @@ mount_sshfs_tree() {
   if ! command -v sshfs >/dev/null 2>&1; then
     dnf install -y fuse-sshfs
   fi
-  local uid gid known_hosts
+  local uid gid known_hosts host
   uid=$(id -u "$TARGET_USER")
   gid=$(id -g "$TARGET_USER")
   known_hosts="/etc/ai-sandbox/known_hosts"
-  # Trust-on-first-use: capture host key once, enforce strict checking afterward.
-  if [[ ! -s "$known_hosts" ]]; then
-    ssh-keyscan -T 5 -t ed25519,rsa "$SSHFS_HOST" > "$known_hosts" 2>/dev/null || {
-      echo "Could not fetch host key from $SSHFS_HOST" >&2
-      return 1
-    }
-    chmod 644 "$known_hosts"
+  # Self-heal IP churn: SSHFS_HOST=auto resolves to the default gateway, which on a
+  # Hyper-V Default Switch is always the Windows host (its IP changes across host reboots).
+  host="$SSHFS_HOST"
+  if [[ -z "$host" || "$host" == "auto" ]]; then
+    host=$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')
+    [[ -n "$host" ]] || { echo "SSHFS_HOST=auto but no default gateway found" >&2; return 1; }
   fi
+  # Self-heal dead fuse endpoints: a host sleep or long network drop leaves stale sshfs
+  # mounts ("Transport endpoint is not connected") that block remount and trap the service
+  # in a restart loop. Lazy-unmount any endpoint whose stat errors; leaves before base.
+  for mp in /mnt/host-workspace /mnt/host-secrets /mnt/host-config /mnt/host-ai-sandbox; do
+    if ! timeout 2 stat "$mp" >/dev/null 2>&1; then
+      umount -l "$mp" 2>/dev/null || true
+    fi
+  done
+  # Refresh host key for the current IP each mount (IP churns; key itself is stable). TOFU
+  # over a private internal vSwitch — weak MITM protection, acceptable for this transport.
+  ssh-keyscan -T 5 -t ed25519,rsa "$host" > "$known_hosts" 2>/dev/null || {
+    echo "Could not fetch host key from $host" >&2
+    return 1
+  }
+  chmod 644 "$known_hosts"
   if ! mountpoint -q /mnt/host-ai-sandbox 2>/dev/null; then
-    sshfs "${SSHFS_USER}@${SSHFS_HOST}:${SSHFS_REMOTE_PATH}" /mnt/host-ai-sandbox \
+    sshfs "${SSHFS_USER}@${host}:${SSHFS_REMOTE_PATH}" /mnt/host-ai-sandbox \
       -o "IdentityFile=$SSHFS_IDENTITY,UserKnownHostsFile=$known_hosts,StrictHostKeyChecking=yes,allow_other,default_permissions,uid=$uid,gid=$gid,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
   fi
   mkdir -p "/mnt/host-ai-sandbox/config" "/mnt/host-ai-sandbox/secrets" "/mnt/host-ai-sandbox/workspace" 2>/dev/null || true
