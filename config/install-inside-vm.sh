@@ -251,6 +251,11 @@ if [[ ! -s ~/.claude/settings.json ]]; then
   [[ -f "$CLAUDE_SETTINGS_TEMPLATE" ]] && install_claude_settings_from "$CLAUDE_SETTINGS_TEMPLATE"
 fi
 
+# Status line script: restore host-backed copy if present (settings.json statusLine.command references it).
+if [[ -f "$SANDBOX/secrets/statusline-command.sh" && -s "$SANDBOX/secrets/statusline-command.sh" ]]; then
+  install -m 700 "$SANDBOX/secrets/statusline-command.sh" ~/.claude/statusline-command.sh
+fi
+
 # Vertex (Red Hat) uses ADC + env vars; do not write apiKey when claude-vertex.env is present (any host-backed path).
 VERTEX_ENV_PRESENT=0
 if [ -r "$SANDBOX/secrets/claude-vertex.env" ] || [ -r "$SANDBOX/workspace/.ai-sandbox-private/claude-vertex.env" ]; then
