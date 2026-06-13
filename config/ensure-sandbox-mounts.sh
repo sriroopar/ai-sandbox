@@ -6,7 +6,13 @@ TARGET_USER="${1:-${SUDO_USER:-ai}}"
 SANDBOX_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 SANDBOX="$SANDBOX_HOME/ai-sandbox"
 
-mkdir -p /mnt/host-config /mnt/host-secrets /mnt/host-workspace /mnt/host-ai-sandbox
+# Workspace (project code) no longer comes from the host share — it lives on the
+# VM's native xfs (/home/ai/git/<project>) with GitHub for durability/access.
+# Set MOUNT_WORKSPACE=1 to restore host-backed workspace mounting.
+MOUNT_WORKSPACE="${MOUNT_WORKSPACE:-0}"
+
+mkdir -p /mnt/host-config /mnt/host-secrets /mnt/host-ai-sandbox
+[ "$MOUNT_WORKSPACE" = 1 ] && mkdir -p /mnt/host-workspace
 
 USE_CIFS=0
 USE_SSHFS=0
@@ -68,9 +74,11 @@ mount_sshfs_tree() {
     sshfs "${SSHFS_USER}@${host}:${SSHFS_REMOTE_PATH}" /mnt/host-ai-sandbox \
       -o "IdentityFile=$SSHFS_IDENTITY,UserKnownHostsFile=$known_hosts,StrictHostKeyChecking=yes,allow_other,default_permissions,uid=$uid,gid=$gid,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
   fi
-  mkdir -p "/mnt/host-ai-sandbox/config" "/mnt/host-ai-sandbox/secrets" "/mnt/host-ai-sandbox/workspace" 2>/dev/null || true
-  local sub
-  for sub in config secrets workspace; do
+  mkdir -p "/mnt/host-ai-sandbox/config" "/mnt/host-ai-sandbox/secrets" 2>/dev/null || true
+  [ "$MOUNT_WORKSPACE" = 1 ] && mkdir -p "/mnt/host-ai-sandbox/workspace" 2>/dev/null || true
+  local sub subs="config secrets"
+  [ "$MOUNT_WORKSPACE" = 1 ] && subs="config secrets workspace"
+  for sub in $subs; do
     if ! mountpoint -q "/mnt/host-$sub" 2>/dev/null; then
       mount --bind "/mnt/host-ai-sandbox/$sub" "/mnt/host-$sub"
     fi
@@ -103,7 +111,7 @@ mount_cifs_tree() {
   if ! mountpoint -q /mnt/host-secrets 2>/dev/null; then
     mount --bind "/mnt/host-ai-sandbox/secrets" /mnt/host-secrets
   fi
-  if ! mountpoint -q /mnt/host-workspace 2>/dev/null; then
+  if [ "$MOUNT_WORKSPACE" = 1 ] && ! mountpoint -q /mnt/host-workspace 2>/dev/null; then
     mount --bind "/mnt/host-ai-sandbox/workspace" /mnt/host-workspace
   fi
 }
@@ -115,7 +123,7 @@ mount_virtiofs_tree() {
   if ! mountpoint -q /mnt/host-secrets 2>/dev/null; then
     mount -t virtiofs host-secrets /mnt/host-secrets -o ro
   fi
-  if ! mountpoint -q /mnt/host-workspace 2>/dev/null; then
+  if [ "$MOUNT_WORKSPACE" = 1 ] && ! mountpoint -q /mnt/host-workspace 2>/dev/null; then
     mount -t virtiofs host-workspace /mnt/host-workspace
   fi
 }
@@ -146,6 +154,7 @@ else
   fi
 fi
 
+if [ "$MOUNT_WORKSPACE" = 1 ]; then
 WS=/mnt/host-workspace
 install -d -o "$TARGET_USER" -g "$TARGET_USER" "$WS"
 
@@ -196,11 +205,18 @@ fi
 if [[ -L "$SANDBOX/projects" ]]; then
   rm -f "$SANDBOX/projects"
 fi
+fi  # MOUNT_WORKSPACE — host-workspace migration block
 
 install -d -o "$TARGET_USER" -g "$TARGET_USER" "$SANDBOX" "$SANDBOX/logs"
 
 ln -sfn /mnt/host-config "$SANDBOX/config"
 ln -sfn /mnt/host-secrets "$SANDBOX/secrets"
-ln -sfn /mnt/host-workspace "$SANDBOX/workspace"
+if [ "$MOUNT_WORKSPACE" = 1 ]; then
+  ln -sfn /mnt/host-workspace "$SANDBOX/workspace"
+else
+  # Workspace is native now; drop the stale host-workspace symlink if present.
+  [ -L "$SANDBOX/workspace" ] && rm -f "$SANDBOX/workspace"
+fi
 
-chown -h "$TARGET_USER:$TARGET_USER" "$SANDBOX/config" "$SANDBOX/secrets" "$SANDBOX/workspace" 2>/dev/null || true
+chown -h "$TARGET_USER:$TARGET_USER" "$SANDBOX/config" "$SANDBOX/secrets" 2>/dev/null || true
+[ "$MOUNT_WORKSPACE" = 1 ] && chown -h "$TARGET_USER:$TARGET_USER" "$SANDBOX/workspace" 2>/dev/null || true
